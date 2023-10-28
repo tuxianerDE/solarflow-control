@@ -87,6 +87,8 @@ BATTERY_HIGH =          config.getint('control', 'battery_high', fallback=None) 
 MAX_INVERTER_LIMIT =    config.getint('control', 'max_inverter_limit', fallback=None) \
                         or int(os.environ.get('MAX_INVERTER_LIMIT',800))                                               
 MAX_INVERTER_INPUT = MAX_INVERTER_LIMIT - MIN_CHARGE_LEVEL
+MIN_INVERTER_LIMIT =    config.getint('control', 'inverter_min_limit', fallback=None) \
+                        or int(os.environ.get('MAX_INVERTER_LIMIT',10))                                               
 
 # the delta between two consecutive measurements on houshold usage to consider it a fast rise or drop   
 FAST_CHANGE_OFFSET =    config.getint('control', 'fast_change_offset', fallback=None) \
@@ -180,14 +182,10 @@ def subscribe(client: mqtt_client):
     client.on_message = on_message
 
 # calculate the safe inverter limit for direct panels, to avoid output over legal limits
-def getDirectPanelLimit(inv, hub, demand) -> int:
+def getDirectPanelLimit(inv, hub) -> int:
     direct_panel_power = inv.getDirectDCPower()
     if direct_panel_power < MAX_INVERTER_LIMIT:
-        if demand < MAX_INVERTER_LIMIT:
-            return int((demand)*1.1)
-        else:
-            return int(MAX_INVERTER_LIMIT)
-        #return math.ceil(max(inv.getDirectDCPowerValues())*1.1)
+        return math.ceil(max(inv.getDirectDCPowerValues())*1.1)
         #return math.ceil(max( max(inv.getHubDCPowerValues()), max(inv.getDirectDCPowerValues()) ))
     else:
         return int(MAX_INVERTER_LIMIT*(inv.getNrHubChannels()/inv.getNrTotalChannels()))
@@ -324,7 +322,7 @@ def limitHomeInput(client: mqtt_client):
         direct_panel_power = inv.getDirectDCPower()
         if demand <= direct_panel_power:
             # we can conver demand with direct panel power, just use all of it
-            inv_limit = inv.setLimit(getDirectPanelLimit(inv,hub,demand))
+            inv_limit = inv.setLimit(getDirectPanelLimit(inv,hub))
             hub_limit = hub.setOutputLimit(0)
         if demand > direct_panel_power:
             # the remainder should come from SFHub, in case the remainder is greater than direct panels power
@@ -337,9 +335,9 @@ def limitHomeInput(client: mqtt_client):
             # remainder must be calculated according to preferences of charging power, battery state,
             # day/nighttime input limites etc.
             remainder = getSFPowerLimit(hub,remainder)
-            log.info(f'Solarflow is willing to contribute {remainder}W!')
+            log.info(f'Solarflow is willing to contribute {remainder:4.1f}W!')
 
-            inv_limit = inv.setLimit(max(remainder,getDirectPanelLimit(inv,hub,demand)))
+            inv_limit = inv.setLimit(max(remainder,getDirectPanelLimit(inv,hub)))
             hub_limit = hub.setOutputLimit(remainder+10)        # set SF limit higher than inverter limit to avoid MPPT challenges
     else:
         hub_limit = hub.setOutputLimit(limit)
@@ -349,8 +347,8 @@ def limitHomeInput(client: mqtt_client):
     log.info(' '.join(f'Demand: {demand:4.1f}W, \
              Panel DC: ({panels_dc}), \
              Hub DC: ({hub_dc}), \
-             Inverter Limit: {inv_limit}W, \
-             Hub Limit: {hub_limit}W'.split()))
+             Inverter Limit: {inv_limit:4.1f}W, \
+             Hub Limit: {hub_limit:4.1f}W'.split()))
 
 def getOpts(configtype) -> dict:
     global config
